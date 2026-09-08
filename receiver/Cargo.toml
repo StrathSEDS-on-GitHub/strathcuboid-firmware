@@ -40,6 +40,7 @@ trouble-host = { version = "0.6.0", features = ["gatt"] }
 
 critical-section = "1.2.0"
 static_cell      = "2.1.1"
+pwm-pca9685 = "1.0.0"
 
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html

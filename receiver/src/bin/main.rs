@@ -10,10 +10,11 @@
 use bt_hci::controller::ExternalController;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
-use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
+use esp_hal::{clock::CpuClock, time::Rate};
 use esp_radio::ble::controller::BleConnector;
-use log::{error, info};
+use log::{error, info, warn};
+use pwm_pca9685::{Address, Channel, Pca9685};
 use trouble_host::prelude::*;
 
 #[panic_handler]
@@ -81,9 +82,27 @@ async fn main(spawner: Spawner) -> ! {
     // TODO: Spawn some tasks
     let _ = spawner;
 
+    let i2c_bus = esp_hal::i2c::master::I2c::new(
+        peripherals.I2C0,
+        esp_hal::i2c::master::Config::default().with_frequency(Rate::from_hz(1600)),
+    )
+    .unwrap()
+    .with_sda(peripherals.GPIO21)
+    .with_scl(peripherals.GPIO22);
+
+    let mut pwm = Pca9685::new(i2c_bus, Address::default()).unwrap();
+    pwm.set_prescale(100).unwrap();
+    pwm.enable().unwrap();
+    pwm.set_channel_on(Channel::C0, 0).unwrap();
+    pwm.set_channel_off(Channel::C0, 2047).unwrap();
+
+    let mut i = 0;
     loop {
-        info!("Hello world!");
-        Timer::after(Duration::from_secs(1)).await;
+        info!("pwm: {i}");
+        Timer::after(Duration::from_millis(10000)).await;
+
+        pwm.set_channel_off(Channel::All, i).unwrap();
+        i += 100;
     }
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.1.0/examples

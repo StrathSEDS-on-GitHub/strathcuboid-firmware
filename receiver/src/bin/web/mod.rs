@@ -1,5 +1,7 @@
 extern crate alloc;
 
+use core::str::FromStr;
+
 use embassy_net::tcp::TcpSocket;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{IpEndpoint, Ipv4Address, Runner, Stack, StackResources};
@@ -9,6 +11,9 @@ use esp_hal::rng::Rng;
 use esp_radio::wifi::{Interface, Interfaces, WifiController};
 use log::{info, warn};
 use static_cell::StaticCell;
+
+use crate::rover::move_rover;
+use receiver::Movement;
 
 // based on derekmolloy.ie/an-async-wi-fi-web-server-on-the-esp32-c3-with-embassy-and-no_std-rust-9/
 static STACK_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
@@ -174,20 +179,22 @@ pub async fn web_task(stack: Stack<'static>) -> ! {
             }
             "POST" => {
                 info!("POST request for path: {path}");
-                match path {
-                    "/api/left" => info!("Left"),
-                    "/api/right" => info!("Right"),
-                    "/api/forward" => info!("Forward"),
-                    "/api/back" => info!("Back"),
-                    "/api/stop" => info!("Stop"),
-                    _ => info!("Unknown path: {path}"),
-                }
 
-                response_body = "OK";
-                response_header = alloc::format!(
-                    "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    response_body.len()
-                );
+                if let Ok(movement) = Movement::from_str(path.trim_start_matches("/api/")) {
+                    move_rover(movement).await;
+                    response_body = "OK";
+                    response_header = alloc::format!(
+                        "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        response_body.len()
+                    );
+                } else {
+                    info!("Unknown movement command: {path}");
+                    response_body = "Invalid movement command";
+                    response_header = alloc::format!(
+                        "HTTP/1.0 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        response_body.len()
+                    );
+                }
             }
             _ => {
                 info!("Invalid method: {method}");

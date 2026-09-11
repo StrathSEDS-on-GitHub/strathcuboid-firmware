@@ -7,15 +7,18 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use bt_hci::controller::ExternalController;
+use core::sync::atomic::AtomicBool;
+
 use embassy_executor::Spawner;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
+use esp_hal::gpio::{Output, OutputConfig};
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::{clock::CpuClock, time::Rate};
-use esp_radio::ble::controller::BleConnector;
-use log::{error, info, warn};
-use pwm_pca9685::{Address, Channel, Pca9685};
-use trouble_host::prelude::*;
+use esp_hal::clock::CpuClock;
+use esp_radio::esp_now::{EspNowManager, EspNowReceiver, EspNowSender, PeerInfo};
+use log::{error, info};
+use core::sync::atomic::Ordering;
 
 #[panic_handler]
 fn panic(panic_info: &core::panic::PanicInfo) -> ! {
@@ -25,11 +28,6 @@ fn panic(panic_info: &core::panic::PanicInfo) -> ! {
 
 extern crate alloc;
 
-const CONNECTIONS_MAX: usize = 1;
-const L2CAP_CHANNELS_MAX: usize = 1;
-
-// This creates a default app-descriptor required by the esp-idf bootloader.
-// For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
 #[allow(
@@ -37,10 +35,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
     reason = "it's not unusual to allocate larger buffers etc. in main"
 )]
 #[esp_rtos::main]
-async fn main(spawner: Spawner) -> ! {
-    // generator version: 1.3.0
-    // generator parameters: --chip esp32 -o esp32-wroom-32 -o unstable-hal -o alloc -o embassy -o ble-trouble -o log -o ci -o neovim -o vscode -o esp
-
+async fn main(_spawner: Spawner) {
     esp_println::logger::init_logger_from_env();
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
@@ -53,6 +48,7 @@ async fn main(spawner: Spawner) -> ! {
     // - GPIO5
     // - GPIO12
     // - GPIO15
+    //
     // These GPIO pins are in use by some feature of the module and should not be used.
     let _ = peripherals.GPIO6;
     let _ = peripherals.GPIO7;
@@ -72,38 +68,82 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    // find more examples https://github.com/embassy-rs/trouble/tree/main/examples/esp32
-    let transport = BleConnector::new(peripherals.BT, Default::default()).unwrap();
-    let ble_controller = ExternalController::<_, 1>::new(transport);
-    let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
-        HostResources::new();
-    let _stack = trouble_host::new(ble_controller, &mut resources);
+    let (controller, interfaces) = esp_radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
 
-    // TODO: Spawn some tasks
-    let _ = spawner;
+    info!("Wifi channel: {:?}", controller.channel().unwrap());
 
-    let i2c_bus = esp_hal::i2c::master::I2c::new(
-        peripherals.I2C0,
-        esp_hal::i2c::master::Config::default().with_frequency(Rate::from_hz(1600)),
-    )
-    .unwrap()
-    .with_sda(peripherals.GPIO21)
-    .with_scl(peripherals.GPIO22);
+    let esp_now = interfaces.esp_now;
+    let (manager, sender, reciever) = esp_now.split();
+    
+    manager.set_channel(1).unwrap();
 
-    let mut pwm = Pca9685::new(i2c_bus, Address::default()).unwrap();
-    pwm.set_prescale(100).unwrap();
-    pwm.enable().unwrap();
-    pwm.set_channel_on(Channel::C0, 0).unwrap();
-    pwm.set_channel_off(Channel::C0, 2047).unwrap();
+    info!("esp-now version {}", manager.version().unwrap());
 
-    let mut i = 0;
-    loop {
-        info!("pwm: {i}");
-        Timer::after(Duration::from_millis(10000)).await;
+    *(ESP_NOW_MANAGER.lock()).await = Some(manager);
+    *(ESP_NOW_SENDER.lock()).await = Some(sender);
 
-        pwm.set_channel_off(Channel::All, i).unwrap();
-        i += 100;
+    let led = Output::new(peripherals.GPIO2, esp_hal::gpio::Level::High, OutputConfig::default());
+    *(LED.lock()).await = Some(led);
+
+    esp_now_command_handler(reciever).await;
+}
+
+static LED: Mutex<CriticalSectionRawMutex, Option<Output<'static>>> = Mutex::new(None);
+static ESP_NOW_MANAGER: Mutex<CriticalSectionRawMutex, Option<EspNowManager<'static>>> = Mutex::new(None);
+static ESP_NOW_SENDER: Mutex<CriticalSectionRawMutex, Option<EspNowSender<'static>>> = Mutex::new(None);
+static CONNECTED: AtomicBool = AtomicBool::new(false);
+
+async fn esp_now_send(addr: &[u8; 6], data: &[u8]) {
+    let mut sender_unlocked = ESP_NOW_SENDER.lock().await;
+    if let Some(s) = sender_unlocked.as_mut() {
+        let _ = s.send_async(addr, data).await;
     }
+}
 
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.1.0/examples
+async fn esp_now_command_handler(mut receiver: EspNowReceiver<'static>) -> ! {
+    loop {
+        let r = receiver.receive_async().await;
+        let sender_addr = r.info.src_address; 
+            
+        let mut manager_unlocked = ESP_NOW_MANAGER.lock().await;
+        let m = manager_unlocked.as_mut().unwrap(); 
+
+        let connected = CONNECTED.load(Ordering::Relaxed);
+
+        info!("Connected: {}", connected);
+        info!("Recv: {:?}", r.data());
+
+        if connected {
+            let controller_addr = m.fetch_peer(true).unwrap().peer_address;
+            let from_controller = controller_addr.eq(&sender_addr);
+
+            if !from_controller {
+                continue; 
+            }
+
+            if r.data().eq(b"ping") {
+                if let Some(led) = LED.lock().await.as_mut() {
+                    esp_now_send(&sender_addr, b"pong").await;
+                    led.toggle();
+                    Timer::after(Duration::from_secs(1)).await;
+                    led.toggle();
+                } 
+            }
+        } else {
+            if r.data().eq(b"strathcuboid-connect") {
+                info!("Trying to add peer");
+                m.add_peer(PeerInfo { 
+                    interface: esp_radio::esp_now::EspNowWifiInterface::Station, 
+                    peer_address: sender_addr, 
+                    lmk: None, 
+                    channel: None, 
+                    encrypt: false 
+                }).unwrap();
+                
+                esp_now_send(&sender_addr, b"strathcuboid-connected").await; 
+
+                CONNECTED.store(true, Ordering::Relaxed);
+            }
+        }
+    }
 }

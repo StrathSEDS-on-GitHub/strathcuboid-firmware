@@ -4,6 +4,9 @@ local rust_analyzer = {
         target = "xtensa-esp32-none-elf",
         allTargets = false,
     },
+    check = {
+        allTargets = false
+    },
 }
 rust_analyzer.cargo.extraEnv = { RUST_TOOLCHAIN = "esp" }
 rust_analyzer.server = { extraEnv = { RUST_TOOLCHAIN = "stable" } }

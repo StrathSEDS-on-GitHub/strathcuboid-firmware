@@ -7,16 +7,22 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
+use core::sync::atomic::AtomicBool;
+use core::sync::atomic::Ordering;
+
+use embassy_sync::mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 
-use esp_radio::ble::controller::BleConnector;
-use bt_hci::controller::ExternalController;
-use trouble_host::prelude::*;
-
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
 
+use esp_radio::esp_now::BROADCAST_ADDRESS;
+use esp_radio::esp_now::EspNowError;
+use esp_radio::esp_now::EspNowManager;
+use esp_radio::esp_now::EspNowReceiver;
+use esp_radio::esp_now::EspNowSender;
+use esp_radio::esp_now::PeerInfo;
 use log::info;
 use log::error;
 
@@ -28,11 +34,6 @@ fn panic(panic_info: &core::panic::PanicInfo) -> ! {
 
 extern crate alloc;
 
-const CONNECTIONS_MAX: usize = 1;
-const L2CAP_CHANNELS_MAX: usize = 1;
-
-// This creates a default app-descriptor required by the esp-idf bootloader.
-// For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
 #[allow(
@@ -40,24 +41,22 @@ esp_bootloader_esp_idf::esp_app_desc!();
     reason = "it's not unusual to allocate larger buffers etc. in main"
 )]
 #[esp_rtos::main]
-async fn main(spawner: Spawner) -> ! {
-    // generator version: 1.3.0
-    // generator parameters: --chip esp32 -o esp32-wroom-32 -o unstable-hal -o alloc -o embassy -o ble-trouble -o log -o ci -o neovim -o vscode
-
+async fn main(_spawner: Spawner) {
     esp_println::logger::init_logger_from_env();
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
     // The following pins are used to bootstrap the chip. They are available
-                    // for use, but check the datasheet of the module for more information on them.
-                    // - GPIO0
-// - GPIO2
-// - GPIO5
-// - GPIO12
-// - GPIO15
-// These GPIO pins are in use by some feature of the module and should not be used.
-                        let _ = peripherals.GPIO6;
+    // for use, but check the datasheet of the module for more information on them.
+    // - GPIO0
+    // - GPIO2
+    // - GPIO5
+    // - GPIO12
+    // - GPIO15
+    //
+    // These GPIO pins are in use by some feature of the module and should not be used.
+    let _ = peripherals.GPIO6;
     let _ = peripherals.GPIO7;
     let _ = peripherals.GPIO8;
     let _ = peripherals.GPIO9;
@@ -65,7 +64,6 @@ async fn main(spawner: Spawner) -> ! {
     let _ = peripherals.GPIO11;
     let _ = peripherals.GPIO16;
     let _ = peripherals.GPIO20;
-
 
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 98768);
 
@@ -76,20 +74,105 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    // find more examples https://github.com/embassy-rs/trouble/tree/main/examples/esp32
-    let transport = BleConnector::new(peripherals.BT, Default::default()).unwrap();
-    let ble_controller = ExternalController::<_, 1>::new(transport);
-    let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
-        HostResources::new();
-    let _stack = trouble_host::new(ble_controller, &mut resources);
+    let (controller, interfaces) = esp_radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
 
-    // TODO: Spawn some tasks
-    let _ = spawner;
+    info!("Wifi channel: {:?}", controller.channel().unwrap());
 
-    loop {
-        info!("Hello world!");
-        Timer::after(Duration::from_secs(1)).await;
+    let esp_now = interfaces.esp_now;
+    let (manager, sender, reciever) = esp_now.split();
+
+    manager.set_channel(1).unwrap();
+    info!("esp-now version {}", manager.version().unwrap());
+
+    *(ESP_NOW_MANAGER.lock()).await = Some(manager);
+    *(ESP_NOW_SENDER.lock()).await = Some(sender);
+
+    futures_util::join!(
+        esp_now_command_handler(reciever),
+        connect_to_rover_task(),
+        rover_blinky_task()
+    ).0;
+}
+
+static ESP_NOW_MANAGER: Mutex<CriticalSectionRawMutex, Option<EspNowManager<'static>>> = Mutex::new(None);
+static ESP_NOW_SENDER: Mutex<CriticalSectionRawMutex, Option<EspNowSender<'static>>> = Mutex::new(None);
+static CONNECTED: AtomicBool = AtomicBool::new(false);
+
+async fn get_rover_esp_now_addr() -> Option<[u8; 6]> {
+    let connected = CONNECTED.load(Ordering::Relaxed);
+
+    if !connected {
+        return None;
     }
+    
+    let mut manager_unlocked = ESP_NOW_MANAGER.lock().await;
+    let m = manager_unlocked.as_mut().unwrap(); 
+    return Some(m.fetch_peer(true).unwrap().peer_address);
+}
 
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.1.0/examples
+async fn esp_now_send(addr: &[u8; 6], data: &[u8]) -> Result<(), EspNowError> {
+    let mut sender_unlocked = ESP_NOW_SENDER.lock().await;
+    let s = sender_unlocked.as_mut().unwrap();
+    return s.send_async(addr, data).await;
+}
+
+async fn esp_now_command_handler(mut receiver: EspNowReceiver<'static>) -> ! {
+    loop {
+        let r = receiver.receive_async().await;
+        let sender_addr = r.info.src_address; 
+            
+        let mut manager_unlocked = ESP_NOW_MANAGER.lock().await;
+        let m = manager_unlocked.as_mut().unwrap(); 
+
+        let connected = CONNECTED.load(Ordering::Relaxed);
+
+        info!("Recv: {:?}", r.data());
+
+        if !connected && r.data().eq(b"strathcuboid-connected") {
+            info!("Trying to connect");
+            m.add_peer(PeerInfo { 
+                interface: esp_radio::esp_now::EspNowWifiInterface::Station, 
+                peer_address: sender_addr, 
+                lmk: None, 
+                channel: None, 
+                encrypt: false 
+            }).unwrap();
+
+            CONNECTED.store(true, Ordering::Relaxed);
+
+            info!("Connected");
+        } else if r.data().eq(b"pong") { // TODO: Handle responses
+            info!("Table tennis");
+        }
+    }
+}
+
+async fn connect_to_rover_task() -> ! {
+    loop {
+        let connected = CONNECTED.load(Ordering::Relaxed);
+
+        if !connected {
+            let mut sender_unlocked = ESP_NOW_SENDER.lock().await;
+            let s = sender_unlocked.as_mut().unwrap();
+            s.send_async(&BROADCAST_ADDRESS, b"strathcuboid-connect").await.unwrap();
+            // esp_now_send(&BROADCAST_ADDRESS, b"strathcuboid-connect").await.unwrap();
+        } else {
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(100)).await;
+        }
+    }
+}
+
+async fn rover_blinky_task() -> ! {
+    loop {
+        let connected = CONNECTED.load(Ordering::Relaxed);
+
+        if connected {
+            info!("Trying to ping rover");
+            if let Err(e) = esp_now_send(&get_rover_esp_now_addr().await.unwrap(), b"ping").await {
+                error!("Failed to ping rover {:?}", e);
+            }
+        } else {
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(1000)).await;
+        }
+    }
 }

@@ -13,6 +13,8 @@ use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use log::{error, info};
 
+mod web;
+
 #[panic_handler]
 fn panic(panic_info: &core::panic::PanicInfo) -> ! {
     error!("{}", panic_info);
@@ -71,7 +73,7 @@ async fn main(spawner: Spawner) -> ! {
         .expect("Failed to initialize Wi-Fi controller");
 
     // Start the web server
-    spawner.spawn(web_test::web::start_web_server(spawner, interfaces, wifi_controller).unwrap());
+    spawner.spawn(web::start_web_server(spawner, interfaces, wifi_controller).unwrap());
 
     // Not allowed to quit
     loop {

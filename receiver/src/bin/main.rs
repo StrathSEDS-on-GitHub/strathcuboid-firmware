@@ -13,11 +13,15 @@ use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
+use esp_hal::Blocking;
 use esp_hal::gpio::{Output, OutputConfig};
+use esp_hal::i2c::master::I2c;
+use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::clock::CpuClock;
 use esp_radio::esp_now::{EspNowManager, EspNowReceiver, EspNowSender, PeerInfo};
 use log::{error, info};
+use pwm_pca9685::{Address, Channel, Pca9685};
 use core::sync::atomic::Ordering;
 
 #[panic_handler]
@@ -85,13 +89,34 @@ async fn main(_spawner: Spawner) {
     let led = Output::new(peripherals.GPIO2, esp_hal::gpio::Level::High, OutputConfig::default());
     *(LED.lock()).await = Some(led);
 
-    esp_now_command_handler(reciever).await;
+    let i2c_bus = esp_hal::i2c::master::I2c::new(
+        peripherals.I2C0, 
+        esp_hal::i2c::master::Config::default().with_frequency(Rate::from_hz(1600))
+    )
+    .unwrap()
+    .with_sda(peripherals.GPIO21)
+    .with_scl(peripherals.GPIO22);
+
+    let mut pwm = Pca9685::new(i2c_bus, Address::default()).unwrap();
+    pwm.set_prescale(100).unwrap();
+    pwm.enable().unwrap();
+    pwm.set_channel_on_off(pwm_pca9685::Channel::C0, 0, 2047).unwrap();
+    pwm.set_channel_off(Channel::All, 300).unwrap();
+
+    // *(PWM.lock()).await = Some(pwm);
+    //
+    // if let Some(pwm) = PWM.lock().await.as_mut() {
+    //     pwm.set_channel_on_off(pwm_pca9685::Channel::C0, 0, 4095).unwrap();
+    // }
+
+    // esp_now_command_handler(reciever).await;
 }
 
 static LED: Mutex<CriticalSectionRawMutex, Option<Output<'static>>> = Mutex::new(None);
 static ESP_NOW_MANAGER: Mutex<CriticalSectionRawMutex, Option<EspNowManager<'static>>> = Mutex::new(None);
 static ESP_NOW_SENDER: Mutex<CriticalSectionRawMutex, Option<EspNowSender<'static>>> = Mutex::new(None);
 static CONNECTED: AtomicBool = AtomicBool::new(false);
+static PWM: Mutex<CriticalSectionRawMutex, Option<Pca9685<I2c<'static, Blocking>>>> = Mutex::new(None);
 
 async fn esp_now_send(addr: &[u8; 6], data: &[u8]) {
     let mut sender_unlocked = ESP_NOW_SENDER.lock().await;
@@ -128,6 +153,10 @@ async fn esp_now_command_handler(mut receiver: EspNowReceiver<'static>) -> ! {
                     Timer::after(Duration::from_secs(1)).await;
                     led.toggle();
                 } 
+            } else if r.data().eq(b"forward") {
+                if let Some(pwm) = PWM.lock().await.as_mut() {
+                    pwm.set_channel_on_off(pwm_pca9685::Channel::C0, 0, 4095).unwrap();
+                }
             }
         } else {
             if r.data().eq(b"strathcuboid-connect") {

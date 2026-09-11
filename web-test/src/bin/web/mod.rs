@@ -14,7 +14,7 @@ use static_cell::StaticCell;
 static STACK_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
 
 #[embassy_executor::task]
-pub async fn start_web_server(
+pub(super) async fn start_web_server(
     spawner: embassy_executor::Spawner,
     wifi_interface: Interfaces<'static>,
     wifi_controller: WifiController<'static>,

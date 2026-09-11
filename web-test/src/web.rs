@@ -4,6 +4,7 @@ use embassy_net::tcp::TcpSocket;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{IpEndpoint, Ipv4Address, Runner, Stack};
 use embassy_time::{Duration, Timer};
+use embedded_io_async::Write;
 use esp_radio::wifi::{Interface, WifiController};
 use log::{info, warn};
 
@@ -86,6 +87,7 @@ pub async fn web_task(stack: Stack<'static>) -> ! {
 
         if let Err(e) = socket.accept(80).await {
             warn!("Accept error: {:?}", e);
+            continue;
         }
         log::info!("Client connected from {:?}", socket.remote_endpoint());
         let mut buf = [0u8; 1024];
@@ -103,34 +105,61 @@ pub async fn web_task(stack: Stack<'static>) -> ! {
             }
         }
         let req = core::str::from_utf8(&buf[..len]).unwrap_or("");
-        info!("Received request: {}", req);
         let method = req.split_whitespace().nth(0).unwrap_or("GET");
         let target = req.split_whitespace().nth(1).unwrap_or("/");
         let path = target.split("?").nth(0).unwrap_or("/");
+
+        let response_header;
+        let response_body;
         match method {
             "GET" => {
-                info!("GET request for target: {}, path: {}", target, path);
-                match path {
-                    "/left" => info!("Left"),
-                    "/right" => info!("Right"),
-                    "/forward" => info!("Forward"),
-                    "/back" => info!("Back"),
-                    _ => info!("Unknown path: {}", path),
-                }
-
-                let body = core::str::from_utf8(include_bytes!("index.html")).unwrap();
-                let header = alloc::format!(
-                    "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-
-                if let Err(e) = socket.write(header.as_bytes()).await {
-                    log::warn!("Write error: {:?}", e);
-                } else if let Err(e) = socket.write(body.as_bytes()).await {
-                    log::warn!("Write error: {:?}", e);
+                info!("GET request for path: {path}");
+                if path == "/" {
+                    response_body = core::str::from_utf8(include_bytes!("index.html")).unwrap();
+                    response_header = alloc::format!(
+                        "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        response_body.len()
+                    );
+                } else {
+                    info!("Unknown path: {path}");
+                    response_body = "Not Found";
+                    response_header = alloc::format!(
+                        "HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        response_body.len()
+                    );
                 }
             }
-            _ => info!("Unknown method: {}", method),
+            "POST" => {
+                info!("POST request for path: {path}");
+                match path {
+                    "/api/left" => info!("Left"),
+                    "/api/right" => info!("Right"),
+                    "/api/forward" => info!("Forward"),
+                    "/api/back" => info!("Back"),
+                    "/api/stop" => info!("Stop"),
+                    _ => info!("Unknown path: {path}"),
+                }
+
+                response_body = "OK";
+                response_header = alloc::format!(
+                    "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    response_body.len()
+                );
+            }
+            _ => {
+                info!("Invalid method: {method}");
+                response_body = "Invalid method";
+                response_header = alloc::format!(
+                    "HTTP/1.0 405 Invalid Method\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    response_body.len()
+                );
+            }
+        }
+
+        if let Err(e) = socket.write_all(response_header.as_bytes()).await {
+            log::warn!("Header write error: {:?}", e);
+        } else if let Err(e) = socket.write_all(response_body.as_bytes()).await {
+            log::warn!("Body write error: {:?}", e);
         }
 
         let _ = socket.flush().await;

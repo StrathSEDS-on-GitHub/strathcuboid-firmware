@@ -7,19 +7,15 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use core::sync::atomic::AtomicBool;
-
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
 use esp_hal::gpio::{Output, OutputConfig};
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::clock::CpuClock;
-use esp_radio::esp_now::{EspNowManager, EspNowReceiver, EspNowSender, PeerInfo};
+use esp_hal::{clock::CpuClock, time::Rate};
 use log::{error, info};
-use receiver::rover;
-use core::sync::atomic::Ordering;
+use pwm_pca9685::{Address, Channel, Pca9685};
 
 #[panic_handler]
 fn panic(panic_info: &core::panic::PanicInfo) -> ! {
@@ -27,8 +23,12 @@ fn panic(panic_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+mod web;
+
 extern crate alloc;
 
+// This creates a default app-descriptor required by the esp-idf bootloader.
+// For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
 #[allow(
@@ -69,164 +69,35 @@ async fn main(_spawner: Spawner) {
 
     info!("Embassy initialized!");
 
-    let (controller, interfaces) = esp_radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
+    let (wifi_controller, interfaces) = esp_radio::wifi::new(peripherals.WIFI, Default::default())
+        .expect("Failed to initialize Wi-Fi controller");
 
-    info!("Wifi channel: {:?}", controller.channel().unwrap());
+    // Start the web server
+    spawner.spawn(web::start_web_server(spawner, interfaces, wifi_controller).unwrap());
+    info!("Web server started!");
 
     let esp_now = interfaces.esp_now;
     let (manager, sender, reciever) = esp_now.split();
     
     manager.set_channel(1).unwrap();
 
-    info!("esp-now version {}", manager.version().unwrap());
+    let mut pwm = Pca9685::new(i2c_bus, Address::default()).unwrap();
+    if let Ok(_) = pwm.set_prescale(100) {
+        pwm.enable().unwrap();
+        pwm.set_channel_on(Channel::C0, 0).unwrap();
+        pwm.set_channel_off(Channel::C0, 2047).unwrap();
 
-    *(ESP_NOW_MANAGER.lock()).await = Some(manager);
-    *(ESP_NOW_SENDER.lock()).await = Some(sender);
+        let mut i = 0;
+        loop {
+            info!("pwm: {i}");
+            Timer::after(Duration::from_millis(10000)).await;
 
-    let led = Output::new(peripherals.GPIO2, esp_hal::gpio::Level::High, OutputConfig::default());
-    *(LED.lock()).await = Some(led);
-
-    rover::init_rover(peripherals.I2C0, peripherals.GPIO21, peripherals.GPIO22).await;
-
-    // rover::forwards().await;
-    // Timer::after(Duration::from_secs(2)).await;
-    // rover::stop().await;
-    // Timer::after(Duration::from_secs(1)).await;
-    //
-    // rover::left().await;
-    // Timer::after(Duration::from_secs(2)).await;
-    // rover::stop().await;
-    // Timer::after(Duration::from_secs(1)).await;
-    //
-    // rover::right().await;
-    // Timer::after(Duration::from_secs(2)).await;
-    // rover::stop().await;
-    // Timer::after(Duration::from_secs(1)).await;
-    //
-    // rover::backwards().await;
-    // Timer::after(Duration::from_secs(2)).await;
-    // rover::stop().await;
-    // Timer::after(Duration::from_secs(1)).await;
-
-    // let i2c_bus = esp_hal::i2c::master::I2c::new(
-    //     peripherals.I2C0, 
-    //     esp_hal::i2c::master::Config::default().with_frequency(Rate::from_hz(1600))
-    // )
-    // .unwrap()
-    // .with_sda(peripherals.GPIO21)
-    // .with_scl(peripherals.GPIO22);
-    //
-    // let mut pwm = Pca9685::new(i2c_bus, Address::default()).unwrap();
-    // pwm.set_prescale(100).unwrap();
-    // pwm.enable().unwrap();
-
-    // forward
-    // pwm.set_channel_on_off(Channel::C1, 0, 250).unwrap();
-    // pwm.set_channel_on_off(Channel::C2, 0, 550).unwrap();
-    // pwm.set_channel_on_off(Channel::C0, 0, 250).unwrap();
-    // pwm.set_channel_on_off(Channel::C3, 0, 550).unwrap();
-    //
-    // Timer::after(Duration::from_secs(2)).await;
-
-    // backwards 
-    // pwm.set_channel_on_off(Channel::C1, 0, 550).unwrap();
-    // pwm.set_channel_on_off(Channel::C2, 0, 250).unwrap();
-    // pwm.set_channel_on_off(Channel::C0, 0, 550).unwrap();
-    // pwm.set_channel_on_off(Channel::C3, 0, 250).unwrap();
-    //
-    // Timer::after(Duration::from_secs(2)).await;
-    
-    // left 
-    // pwm.set_channel_on_off(Channel::C1, 0, 250).unwrap();
-    // pwm.set_channel_on_off(Channel::C2, 0, 250).unwrap();
-    // pwm.set_channel_on_off(Channel::C0, 0, 250).unwrap();
-    // pwm.set_channel_on_off(Channel::C3, 0, 250).unwrap();
-    //
-    // Timer::after(Duration::from_secs(2)).await;
-
-    // right  
-    // pwm.set_channel_on_off(Channel::C1, 0, 550).unwrap();
-    // pwm.set_channel_on_off(Channel::C2, 0, 550).unwrap();
-    // pwm.set_channel_on_off(Channel::C0, 0, 550).unwrap();
-    // pwm.set_channel_on_off(Channel::C3, 0, 550).unwrap();
-    //
-    // Timer::after(Duration::from_secs(2)).await;
-
-    // for i in 0..1000 {
-    //     info!("{}", i);
-    //     pwm.set_channel_on_off(Channel::C3, 0, i).unwrap();
-    //     Timer::after(Duration::from_millis(100)).await;
-    // }
-
-    // Timer::after(Duration::from_secs(2)).await;
-    // pwm.disable().unwrap();
-    // *(PWM.lock()).await = Some(pwm);
-    //
-    // if let Some(pwm) = PWM.lock().await.as_mut() {
-    //     pwm.set_channel_on_off(pwm_pca9685::Channel::C0, 0, 4095).unwrap();
-    // }
-
-    // esp_now_command_handler(reciever).await;
-}
-
-static LED: Mutex<CriticalSectionRawMutex, Option<Output<'static>>> = Mutex::new(None);
-static ESP_NOW_MANAGER: Mutex<CriticalSectionRawMutex, Option<EspNowManager<'static>>> = Mutex::new(None);
-static ESP_NOW_SENDER: Mutex<CriticalSectionRawMutex, Option<EspNowSender<'static>>> = Mutex::new(None);
-static CONNECTED: AtomicBool = AtomicBool::new(false);
-
-async fn esp_now_send(addr: &[u8; 6], data: &[u8]) {
-    let mut sender_unlocked = ESP_NOW_SENDER.lock().await;
-    if let Some(s) = sender_unlocked.as_mut() {
-        let _ = s.send_async(addr, data).await;
-    }
-}
-
-async fn esp_now_command_handler(mut receiver: EspNowReceiver<'static>) -> ! {
-    loop {
-        let r = receiver.receive_async().await;
-        let sender_addr = r.info.src_address; 
-            
-        let mut manager_unlocked = ESP_NOW_MANAGER.lock().await;
-        let m = manager_unlocked.as_mut().unwrap(); 
-
-        let connected = CONNECTED.load(Ordering::Relaxed);
-
-        info!("Connected: {}", connected);
-        info!("Recv: {:?}", r.data());
-
-        if connected {
-            let controller_addr = m.fetch_peer(true).unwrap().peer_address;
-            let from_controller = controller_addr.eq(&sender_addr);
-
-            if !from_controller {
-                continue; 
-            }
-
-            if r.data().eq(b"ping") {
-                if let Some(led) = LED.lock().await.as_mut() {
-                    esp_now_send(&sender_addr, b"pong").await;
-                    led.toggle();
-                    Timer::after(Duration::from_secs(1)).await;
-                    led.toggle();
-                } 
-            } else if r.data().eq(b"forward") {
-
-            }
-        } else {
-            if r.data().eq(b"strathcuboid-connect") {
-                info!("Trying to add peer");
-                m.add_peer(PeerInfo { 
-                    interface: esp_radio::esp_now::EspNowWifiInterface::Station, 
-                    peer_address: sender_addr, 
-                    lmk: None, 
-                    channel: None, 
-                    encrypt: false 
-                }).unwrap();
-                
-                esp_now_send(&sender_addr, b"strathcuboid-connected").await; 
-
-                CONNECTED.store(true, Ordering::Relaxed);
-            }
+            pwm.set_channel_off(Channel::All, i).unwrap();
+            i += 100;
         }
+    }
+    // Not allowed to quit
+    loop {
+        Timer::after(Duration::from_secs(60)).await;
     }
 }

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StrathCuboid Robot</title>
+</head>
+
+<body>
+  <h1>Hello from StrathCuboid</h1>
+  <div class="container">
+    <div></div>
+
+    <button onclick="sendMovement('forward')">forward</button>
+
+    <div></div>
+
+    <button onclick="sendMovement('left')">left</button>
+    <button onclick="sendMovement('stop')">stop</button>
+    <button onclick="sendMovement('right')">right</button>
+
+    <div></div>
+    <button onclick="sendMovement('back')">back</button>
+    <div></div>
+  </div>
+  <p>Press a button or use WASD to move</p>
+  <p id="status">Command: </p>
+</body>
+
+</html>
+
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    text-align: center;
+  }
+
+  .container {
+    display: grid;
+    grid-template-columns: auto auto auto;
+    gap: 10px;
+    margin: 0 auto;
+    width: 300px;
+  }
+
+  .container button {
+    font-size: 1.5em;
+    display: grid;
+    place-items: center;
+    width: 100px;
+    height: 100px;
+  }
+</style>
+
+<script>
+  async function sendMovement(direction) {
+    document.getElementById("status").innerText = "Command: " + direction;
+    console.log(`Sending movement: ${direction}`);
+    await fetch(`/api/${direction}`, { method: "POST" });
+  }
+
+  document.addEventListener("keydown", (event) => {
+    switch (event.key) {
+      case "a":
+        sendMovement("left");
+        break;
+      case "s":
+        sendMovement("back");
+        break;
+      case "w":
+        sendMovement("forward");
+        break;
+      case "d":
+        sendMovement("right");
+        break;
+    }
+  });
+  document.addEventListener("keyup", (event) => {
+    sendMovement("stop");
+  });
+
+</script>

@@ -2,13 +2,56 @@ extern crate alloc;
 
 use embassy_net::tcp::TcpSocket;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
-use embassy_net::{IpEndpoint, Ipv4Address, Runner, Stack};
+use embassy_net::{IpEndpoint, Ipv4Address, Runner, Stack, StackResources};
 use embassy_time::{Duration, Timer};
 use embedded_io_async::Write;
-use esp_radio::wifi::{Interface, WifiController};
+use esp_hal::rng::Rng;
+use esp_radio::wifi::{Interface, Interfaces, WifiController};
 use log::{info, warn};
+use static_cell::StaticCell;
 
 // based on derekmolloy.ie/an-async-wi-fi-web-server-on-the-esp32-c3-with-embassy-and-no_std-rust-9/
+static STACK_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+
+#[embassy_executor::task]
+pub async fn start_web_server(
+    spawner: embassy_executor::Spawner,
+    wifi_interface: Interfaces<'static>,
+    wifi_controller: WifiController<'static>,
+) {
+    let net_config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
+        address: embassy_net::Ipv4Cidr::new(embassy_net::Ipv4Address::new(192, 168, 4, 1), 24),
+        gateway: None,
+        dns_servers: Default::default(),
+    });
+
+    let rng = Rng::new();
+    let seed = (rng.random() as u64) << 32 | (rng.random() as u64);
+
+    let (stack, runner) = embassy_net::new(
+        wifi_interface.access_point,
+        net_config,
+        STACK_RESOURCES.init(StackResources::new()),
+        seed,
+    );
+
+    spawner.spawn(net_task(runner).unwrap());
+    spawner.spawn(wifi_task(wifi_controller).unwrap());
+    log::info!("Waiting for access point network link...");
+
+    stack.wait_config_up().await;
+
+    if let Some(config) = stack.config_v4() {
+        info!(
+            "Access point is available at http://{}",
+            config.address.address()
+        );
+    }
+
+    info!("Starting web server");
+    spawner.spawn(dhcp_task(stack).unwrap());
+    spawner.spawn(web_task(stack).unwrap());
+}
 
 #[embassy_executor::task]
 pub async fn net_task(mut runner: Runner<'static, Interface<'static>>) -> ! {

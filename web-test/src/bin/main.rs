@@ -8,13 +8,10 @@
 #![deny(clippy::large_stack_frames)]
 
 use embassy_executor::Spawner;
-use embassy_net::StackResources;
 use embassy_time::{Duration, Timer};
+use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::{clock::CpuClock, rng::Rng};
 use log::{error, info};
-use static_cell::StaticCell;
-use web_test::web::{dhcp_task, net_task, web_task, wifi_task};
 
 #[panic_handler]
 fn panic(panic_info: &core::panic::PanicInfo) -> ! {
@@ -23,8 +20,6 @@ fn panic(panic_info: &core::panic::PanicInfo) -> ! {
 }
 
 extern crate alloc;
-
-static STACK_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -74,49 +69,12 @@ async fn main(spawner: Spawner) -> ! {
 
     let (wifi_controller, interfaces) = esp_radio::wifi::new(peripherals.WIFI, Default::default())
         .expect("Failed to initialize Wi-Fi controller");
-    // find more examples https://github.com/embassy-rs/trouble/tree/main/examples/esp32
 
-    // TODO: Spawn some tasks
-    let _ = spawner;
+    // Start the web server
+    spawner.spawn(web_test::web::start_web_server(spawner, interfaces, wifi_controller).unwrap());
 
-    // -------
-
-    let net_config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
-        address: embassy_net::Ipv4Cidr::new(embassy_net::Ipv4Address::new(192, 168, 4, 1), 24),
-        gateway: None,
-        dns_servers: Default::default(),
-    });
-
-    let rng = Rng::new();
-    let seed = (rng.random() as u64) << 32 | (rng.random() as u64);
-
-    let (stack, runner) = embassy_net::new(
-        interfaces.access_point,
-        net_config,
-        STACK_RESOURCES.init(StackResources::new()),
-        seed,
-    );
-
-    spawner.spawn(net_task(runner).unwrap());
-    spawner.spawn(wifi_task(wifi_controller).unwrap());
-    log::info!("Waiting for access point network link...");
-
-    stack.wait_config_up().await;
-
-    if let Some(config) = stack.config_v4() {
-        info!(
-            "Access point is available at http://{}",
-            config.address.address()
-        );
-    }
-
-    info!("Starting web server");
-    spawner.spawn(dhcp_task(stack).unwrap());
-    spawner.spawn(web_task(stack).unwrap());
-
+    // Not allowed to quit
     loop {
         Timer::after(Duration::from_secs(60)).await;
     }
-
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.1.0/examples
 }

@@ -101,7 +101,7 @@ async fn main(_spawner: Spawner) {
     pwm.set_prescale(100).unwrap();
     pwm.enable().unwrap();
     pwm.set_channel_on_off(pwm_pca9685::Channel::C0, 0, 2047).unwrap();
-    pwm.set_channel_off(Channel::All, 2047).unwrap();
+    pwm.set_channel_off(Channel::All, 300).unwrap();
 
     // *(PWM.lock()).await = Some(pwm);
     //

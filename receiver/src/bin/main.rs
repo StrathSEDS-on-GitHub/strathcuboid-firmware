@@ -21,7 +21,7 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::clock::CpuClock;
 use esp_radio::esp_now::{EspNowManager, EspNowReceiver, EspNowSender, PeerInfo};
 use log::{error, info};
-use pwm_pca9685::{Address, Pca9685};
+use pwm_pca9685::{Address, Channel, Pca9685};
 use core::sync::atomic::Ordering;
 
 #[panic_handler]
@@ -100,10 +100,16 @@ async fn main(_spawner: Spawner) {
     let mut pwm = Pca9685::new(i2c_bus, Address::default()).unwrap();
     pwm.set_prescale(100).unwrap();
     pwm.enable().unwrap();
+    pwm.set_channel_on_off(pwm_pca9685::Channel::C0, 0, 2047).unwrap();
+    pwm.set_channel_off(Channel::All, 2047).unwrap();
 
-    *(PWM.lock()).await = Some(pwm);
+    // *(PWM.lock()).await = Some(pwm);
+    //
+    // if let Some(pwm) = PWM.lock().await.as_mut() {
+    //     pwm.set_channel_on_off(pwm_pca9685::Channel::C0, 0, 4095).unwrap();
+    // }
 
-    esp_now_command_handler(reciever).await;
+    // esp_now_command_handler(reciever).await;
 }
 
 static LED: Mutex<CriticalSectionRawMutex, Option<Output<'static>>> = Mutex::new(None);

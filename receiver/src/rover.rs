@@ -25,6 +25,13 @@ pub async fn init_rover(
     pwm.set_prescale(100).unwrap();
     pwm.enable().unwrap();
 
+    pwm.set_channel_on_off(Channel::C2, 0, 250).unwrap();
+    Timer::after(Duration::from_secs(2)).await;
+    pwm.set_channel_on_off(Channel::C2, 0, 0).unwrap();
+    Timer::after(Duration::from_secs(2)).await;
+    pwm.set_channel_on_off(Channel::C2, 0, 250).unwrap();
+    Timer::after(Duration::from_secs(2)).await;
+
     *(PWM.lock()).await = Some(pwm);
 }
 

@@ -7,15 +7,12 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use bt_hci::controller::ExternalController;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{clock::CpuClock, time::Rate};
-use esp_radio::ble::controller::BleConnector;
-use log::{error, info, warn};
+use log::{error, info};
 use pwm_pca9685::{Address, Channel, Pca9685};
-use trouble_host::prelude::*;
 
 #[panic_handler]
 fn panic(panic_info: &core::panic::PanicInfo) -> ! {
@@ -23,10 +20,9 @@ fn panic(panic_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-extern crate alloc;
+mod web;
 
-const CONNECTIONS_MAX: usize = 1;
-const L2CAP_CHANNELS_MAX: usize = 1;
+extern crate alloc;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -72,15 +68,12 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    // find more examples https://github.com/embassy-rs/trouble/tree/main/examples/esp32
-    let transport = BleConnector::new(peripherals.BT, Default::default()).unwrap();
-    let ble_controller = ExternalController::<_, 1>::new(transport);
-    let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
-        HostResources::new();
-    let _stack = trouble_host::new(ble_controller, &mut resources);
+    let (wifi_controller, interfaces) = esp_radio::wifi::new(peripherals.WIFI, Default::default())
+        .expect("Failed to initialize Wi-Fi controller");
 
-    // TODO: Spawn some tasks
-    let _ = spawner;
+    // Start the web server
+    spawner.spawn(web::start_web_server(spawner, interfaces, wifi_controller).unwrap());
+    info!("Web server started!");
 
     let i2c_bus = esp_hal::i2c::master::I2c::new(
         peripherals.I2C0,
@@ -91,19 +84,22 @@ async fn main(spawner: Spawner) -> ! {
     .with_scl(peripherals.GPIO22);
 
     let mut pwm = Pca9685::new(i2c_bus, Address::default()).unwrap();
-    pwm.set_prescale(100).unwrap();
-    pwm.enable().unwrap();
-    pwm.set_channel_on(Channel::C0, 0).unwrap();
-    pwm.set_channel_off(Channel::C0, 2047).unwrap();
+    if let Ok(_) = pwm.set_prescale(100) {
+        pwm.enable().unwrap();
+        pwm.set_channel_on(Channel::C0, 0).unwrap();
+        pwm.set_channel_off(Channel::C0, 2047).unwrap();
 
-    let mut i = 0;
-    loop {
-        info!("pwm: {i}");
-        Timer::after(Duration::from_millis(10000)).await;
+        let mut i = 0;
+        loop {
+            info!("pwm: {i}");
+            Timer::after(Duration::from_millis(10000)).await;
 
-        pwm.set_channel_off(Channel::All, i).unwrap();
-        i += 100;
+            pwm.set_channel_off(Channel::All, i).unwrap();
+            i += 100;
+        }
     }
-
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.1.0/examples
+    // Not allowed to quit
+    loop {
+        Timer::after(Duration::from_secs(60)).await;
+    }
 }

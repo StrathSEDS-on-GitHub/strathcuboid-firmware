@@ -20,8 +20,8 @@ fn panic(panic_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+pub(crate) mod rover;
 mod web;
-
 extern crate alloc;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
@@ -67,6 +67,7 @@ async fn main(spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
     info!("Embassy initialized!");
+    rover::init_rover(peripherals.I2C0, peripherals.GPIO21, peripherals.GPIO22).await;
 
     let (wifi_controller, interfaces) = esp_radio::wifi::new(peripherals.WIFI, Default::default())
         .expect("Failed to initialize Wi-Fi controller");
@@ -75,29 +76,30 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(web::start_web_server(spawner, interfaces, wifi_controller).unwrap());
     info!("Web server started!");
 
-    let i2c_bus = esp_hal::i2c::master::I2c::new(
-        peripherals.I2C0,
-        esp_hal::i2c::master::Config::default().with_frequency(Rate::from_hz(1600)),
-    )
-    .unwrap()
-    .with_sda(peripherals.GPIO21)
-    .with_scl(peripherals.GPIO22);
+    // rover::forwards().await;
+    // Timer::after(Duration::from_secs(2)).await;
+    // rover::stop().await;
+    // Timer::after(Duration::from_secs(1)).await;
+    //
+    // rover::left().await;
+    // Timer::after(Duration::from_secs(2)).await;
+    // rover::stop().await;
+    // Timer::after(Duration::from_secs(1)).await;
+    //
+    // rover::right().await;
+    // Timer::after(Duration::from_secs(2)).await;
+    // rover::stop().await;
+    // Timer::after(Duration::from_secs(1)).await;
+    //
+    // rover::backwards().await;
+    // Timer::after(Duration::from_secs(2)).await;
+    // rover::stop().await;
+    // Timer::after(Duration::from_secs(1)).await;
 
-    let mut pwm = Pca9685::new(i2c_bus, Address::default()).unwrap();
-    if let Ok(_) = pwm.set_prescale(100) {
-        pwm.enable().unwrap();
-        pwm.set_channel_on(Channel::C0, 0).unwrap();
-        pwm.set_channel_off(Channel::C0, 2047).unwrap();
-
-        let mut i = 0;
-        loop {
-            info!("pwm: {i}");
-            Timer::after(Duration::from_millis(10000)).await;
-
-            pwm.set_channel_off(Channel::All, i).unwrap();
-            i += 100;
-        }
+    if let Some(pwm) = rover::PWM.lock().await.as_mut() {
+        pwm.disable().unwrap();
     }
+
     // Not allowed to quit
     loop {
         Timer::after(Duration::from_secs(60)).await;

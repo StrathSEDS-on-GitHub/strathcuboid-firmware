@@ -1,6 +1,6 @@
 [package]
 edition = "2024"
-name = "web-test"
+name = "receiver"
 rust-version = "1.88"
 version = "0.1.0"
 
@@ -21,6 +21,7 @@ embassy-net = { version = "0.9.1", features = [
   "tcp",
   "udp",
 ] }
+embassy-sync = "0.8.0"
 embassy-time = { version = "0.5.0", features = ["log"] }
 embedded-io = "0.7.1"
 embedded-io-async = "0.7.0"

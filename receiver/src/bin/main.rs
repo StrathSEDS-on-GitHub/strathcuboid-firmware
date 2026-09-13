@@ -97,9 +97,9 @@ async fn main(_spawner: Spawner) {
     // rover::stop().await;
     // Timer::after(Duration::from_secs(1)).await;
 
-    if let Some(pwm) = rover::PWM.lock().await.as_mut() {
-        pwm.disable().unwrap();
-    }
+    // if let Some(pwm) = rover::PWM.lock().await.as_mut() {
+    //     pwm.disable().unwrap();
+    // }
 
     // Not allowed to quit
     loop {

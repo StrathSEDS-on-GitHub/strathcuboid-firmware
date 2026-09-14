@@ -1,12 +1,10 @@
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Timer};
 use esp_hal::Blocking;
 use esp_hal::gpio::interconnect::{PeripheralInput, PeripheralOutput};
 use esp_hal::i2c::master::{I2c, Instance};
 use esp_hal::time::Rate;
-use log::{info, warn};
+use log::info;
 use pwm_pca9685::{Address, Channel, Pca9685};
 
 use receiver::Movement;
@@ -47,7 +45,7 @@ pub async fn move_rover(movement: Movement) {
 enum WheelDirection {
     Forwards,
     Backwards,
-    Stop
+    Stop,
 }
 
 fn is_left_wheel(channel: &Channel) -> bool {
@@ -55,15 +53,19 @@ fn is_left_wheel(channel: &Channel) -> bool {
         Channel::C0 => true,
         Channel::C1 => true,
         Channel::C4 => true,
-        _ => false
+        _ => false,
     }
 }
 
 fn move_wheel(pwm: &mut Pca9685<I2c<'static, Blocking>>, channel: Channel, dir: WheelDirection) {
     match dir {
-        WheelDirection::Forwards if is_left_wheel(&channel) => pwm.set_channel_on_off(channel, 0, 550).unwrap(),
+        WheelDirection::Forwards if is_left_wheel(&channel) => {
+            pwm.set_channel_on_off(channel, 0, 550).unwrap()
+        }
         WheelDirection::Forwards => pwm.set_channel_on_off(channel, 0, 250).unwrap(),
-        WheelDirection::Backwards if is_left_wheel(&channel) => pwm.set_channel_on_off(channel, 0, 250).unwrap(),
+        WheelDirection::Backwards if is_left_wheel(&channel) => {
+            pwm.set_channel_on_off(channel, 0, 250).unwrap()
+        }
         WheelDirection::Backwards => pwm.set_channel_on_off(channel, 0, 550).unwrap(),
         WheelDirection::Stop => pwm.set_channel_on_off(channel, 0, 0).unwrap(),
     }
@@ -72,7 +74,7 @@ fn move_wheel(pwm: &mut Pca9685<I2c<'static, Blocking>>, channel: Channel, dir: 
 async fn forwards() {
     let mut pwm_guard = PWM.lock().await;
     let pwm = pwm_guard.as_mut().unwrap();
-   
+
     move_wheel(pwm, Channel::C0, WheelDirection::Forwards);
     move_wheel(pwm, Channel::C1, WheelDirection::Forwards);
     move_wheel(pwm, Channel::C2, WheelDirection::Forwards);
@@ -84,7 +86,7 @@ async fn forwards() {
 async fn backwards() {
     let mut pwm_guard = PWM.lock().await;
     let pwm = pwm_guard.as_mut().unwrap();
-   
+
     move_wheel(pwm, Channel::C0, WheelDirection::Backwards);
     move_wheel(pwm, Channel::C1, WheelDirection::Backwards);
     move_wheel(pwm, Channel::C2, WheelDirection::Backwards);
@@ -96,7 +98,7 @@ async fn backwards() {
 async fn left() {
     let mut pwm_guard = PWM.lock().await;
     let pwm = pwm_guard.as_mut().unwrap();
-   
+
     move_wheel(pwm, Channel::C0, WheelDirection::Backwards);
     move_wheel(pwm, Channel::C1, WheelDirection::Backwards);
     move_wheel(pwm, Channel::C2, WheelDirection::Forwards);
@@ -108,7 +110,7 @@ async fn left() {
 async fn right() {
     let mut pwm_guard = PWM.lock().await;
     let pwm = pwm_guard.as_mut().unwrap();
-   
+
     move_wheel(pwm, Channel::C0, WheelDirection::Forwards);
     move_wheel(pwm, Channel::C1, WheelDirection::Forwards);
     move_wheel(pwm, Channel::C2, WheelDirection::Backwards);
@@ -120,7 +122,7 @@ async fn right() {
 async fn stop() {
     let mut pwm_guard = PWM.lock().await;
     let pwm = pwm_guard.as_mut().unwrap();
-   
+
     move_wheel(pwm, Channel::C0, WheelDirection::Stop);
     move_wheel(pwm, Channel::C1, WheelDirection::Stop);
     move_wheel(pwm, Channel::C2, WheelDirection::Stop);

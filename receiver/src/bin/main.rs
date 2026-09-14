@@ -76,30 +76,6 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(web::start_web_server(spawner, interfaces, wifi_controller).unwrap());
     info!("Web server started!");
 
-    // rover::forwards().await;
-    // Timer::after(Duration::from_secs(2)).await;
-    // rover::stop().await;
-    // Timer::after(Duration::from_secs(1)).await;
-    //
-    // rover::left().await;
-    // Timer::after(Duration::from_secs(2)).await;
-    // rover::stop().await;
-    // Timer::after(Duration::from_secs(1)).await;
-    //
-    // rover::right().await;
-    // Timer::after(Duration::from_secs(2)).await;
-    // rover::stop().await;
-    // Timer::after(Duration::from_secs(1)).await;
-    //
-    // rover::backwards().await;
-    // Timer::after(Duration::from_secs(2)).await;
-    // rover::stop().await;
-    // Timer::after(Duration::from_secs(1)).await;
-
-    // if let Some(pwm) = rover::PWM.lock().await.as_mut() {
-    //     pwm.disable().unwrap();
-    // }
-
     // Not allowed to quit
     loop {
         Timer::after(Duration::from_secs(60)).await;

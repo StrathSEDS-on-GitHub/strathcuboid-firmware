@@ -9,10 +9,9 @@
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
+use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::{clock::CpuClock, time::Rate};
 use log::{error, info};
-use pwm_pca9685::{Address, Channel, Pca9685};
 
 #[panic_handler]
 fn panic(panic_info: &core::panic::PanicInfo) -> ! {

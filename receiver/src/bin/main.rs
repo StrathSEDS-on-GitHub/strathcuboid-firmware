@@ -66,7 +66,7 @@ async fn main(spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
     info!("Embassy initialized!");
-    rover::init_rover(peripherals.I2C0, peripherals.GPIO21, peripherals.GPIO22).await;
+    // rover::init_rover(peripherals.I2C0, peripherals.GPIO21, peripherals.GPIO22).await;
 
     let (wifi_controller, interfaces) = esp_radio::wifi::new(peripherals.WIFI, Default::default())
         .expect("Failed to initialize Wi-Fi controller");

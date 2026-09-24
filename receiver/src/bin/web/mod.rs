@@ -162,19 +162,29 @@ pub async fn web_task(stack: Stack<'static>) -> ! {
         match method {
             "GET" => {
                 info!("GET request for path: {path}");
-                if path == "/" {
-                    response_body = core::str::from_utf8(include_bytes!("index.html")).unwrap();
-                    response_header = alloc::format!(
-                        "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        response_body.len()
-                    );
-                } else {
-                    info!("Unknown path: {path}");
-                    response_body = "Not Found";
-                    response_header = alloc::format!(
-                        "HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        response_body.len()
-                    );
+                match path {
+                    "/" => {
+                        response_body = core::str::from_utf8(include_bytes!("index.html")).unwrap().as_bytes();
+                        response_header = alloc::format!(
+                            "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            response_body.len()
+                        );
+                    },
+                    "/favicon.ico" => {
+                        response_body = include_bytes!("favicon.ico"); 
+                        response_header = alloc::format!(
+                            "HTTP/1.0 200 OK\r\nContent-Type: image/x-icon\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            response_body.len()
+                        );
+                    },
+                    _ => {
+                        info!("Unknown path: {path}");
+                        response_body = "Not Found".as_bytes();
+                        response_header = alloc::format!(
+                            "HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            response_body.len()
+                        );
+                    }
                 }
             }
             "POST" => {
@@ -182,14 +192,14 @@ pub async fn web_task(stack: Stack<'static>) -> ! {
 
                 if let Ok(movement) = Movement::from_str(path.trim_start_matches("/api/")) {
                     move_rover(movement).await;
-                    response_body = "OK";
+                    response_body = "OK".as_bytes();
                     response_header = alloc::format!(
                         "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         response_body.len()
                     );
                 } else {
                     info!("Unknown movement command: {path}");
-                    response_body = "Invalid movement command";
+                    response_body = "Invalid movement command".as_bytes();
                     response_header = alloc::format!(
                         "HTTP/1.0 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         response_body.len()
@@ -198,7 +208,7 @@ pub async fn web_task(stack: Stack<'static>) -> ! {
             }
             _ => {
                 info!("Invalid method: {method}");
-                response_body = "Invalid method";
+                response_body = "Invalid method".as_bytes();
                 response_header = alloc::format!(
                     "HTTP/1.0 405 Invalid Method\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     response_body.len()
@@ -208,7 +218,7 @@ pub async fn web_task(stack: Stack<'static>) -> ! {
 
         if let Err(e) = socket.write_all(response_header.as_bytes()).await {
             log::warn!("Header write error: {:?}", e);
-        } else if let Err(e) = socket.write_all(response_body.as_bytes()).await {
+        } else if let Err(e) = socket.write_all(response_body).await {
             log::warn!("Body write error: {:?}", e);
         }
 

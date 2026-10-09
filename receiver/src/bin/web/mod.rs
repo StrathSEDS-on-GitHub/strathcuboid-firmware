@@ -1,7 +1,10 @@
 extern crate alloc;
 
+use core::cell::Cell;
 use core::str::FromStr;
 
+use alloc::string::{String, ToString};
+use critical_section::Mutex;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{IpEndpoint, Ipv4Address, Runner, Stack, StackResources};
@@ -59,12 +62,12 @@ pub(super) async fn start_web_server(
 }
 
 #[embassy_executor::task]
-pub async fn net_task(mut runner: Runner<'static, Interface<'static>>) -> ! {
+async fn net_task(mut runner: Runner<'static, Interface<'static>>) -> ! {
     runner.run().await
 }
 
 #[embassy_executor::task]
-pub async fn wifi_task(mut controller: WifiController<'static>) {
+async fn wifi_task(mut controller: WifiController<'static>) {
     let access_point_config = esp_radio::wifi::ap::AccessPointConfig::default()
         .with_ssid("esp32 wifi")
         .with_auth_method(esp_radio::wifi::AuthenticationMethod::Wpa2Personal)
@@ -82,7 +85,7 @@ pub async fn wifi_task(mut controller: WifiController<'static>) {
 }
 
 #[embassy_executor::task]
-pub async fn dhcp_task(stack: Stack<'static>) -> ! {
+async fn dhcp_task(stack: Stack<'static>) -> ! {
     let mut rx_metadata = [PacketMetadata::EMPTY; 2];
     let mut tx_metadata = [PacketMetadata::EMPTY; 2];
     let mut socket_rx_buffer = [0u8; 1500];
@@ -123,7 +126,7 @@ pub async fn dhcp_task(stack: Stack<'static>) -> ! {
 }
 
 #[embassy_executor::task]
-pub async fn web_task(stack: Stack<'static>) -> ! {
+async fn web_task(stack: Stack<'static>) -> ! {
     let mut rx_buffer = [0u8; 1536];
     let mut tx_buffer = [0u8; 1536];
 
@@ -157,29 +160,51 @@ pub async fn web_task(stack: Stack<'static>) -> ! {
         let target = req.split_whitespace().nth(1).unwrap_or("/");
         let path = target.split("?").nth(0).unwrap_or("/");
 
-        let response_header;
-        let response_body;
+        let response_header: String;
+        let response_body: String;
         match method {
             "GET" => {
                 info!("GET request for path: {path}");
                 match path {
                     "/" => {
-                        response_body = core::str::from_utf8(include_bytes!("index.html")).unwrap().as_bytes();
+                        let web_status =
+                            critical_section::with(|cs| SERVER_STATUS.borrow(cs).get());
+                        info!("Web status: {web_status:?}");
+
+                        response_body = match web_status {
+                            WebStatus::WaitingForSteppers => {
+                                include_str!("waiting_for_steppers.html").to_string()
+                            }
+                            WebStatus::InitError(msg) => {
+                                info!("Initialization error: {}", msg);
+                                include_str!("init_error.html").replace("{message}", msg)
+                            }
+                            WebStatus::SteppersReady => {
+                                include_str!("drivers_ready.html").to_string()
+                            }
+                        };
                         response_header = alloc::format!(
                             "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             response_body.len()
                         );
-                    },
+                    }
+                    "/style.css" => {
+                        response_body = include_str!("style.css").to_string();
+                        response_header = alloc::format!(
+                            "HTTP/1.0 200 OK\r\nContent-Type: text/css\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            response_body.len()
+                        );
+                    }
                     "/favicon.ico" => {
-                        response_body = include_bytes!("favicon.ico"); 
+                        response_body = include_str!("favicon.ico").to_string();
                         response_header = alloc::format!(
                             "HTTP/1.0 200 OK\r\nContent-Type: image/x-icon\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             response_body.len()
                         );
-                    },
+                    }
                     _ => {
-                        info!("Unknown path: {path}");
-                        response_body = "Not Found".as_bytes();
+                        warn!("Unknown path: {path}");
+                        response_body = "Not Found".to_string();
                         response_header = alloc::format!(
                             "HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             response_body.len()
@@ -191,15 +216,16 @@ pub async fn web_task(stack: Stack<'static>) -> ! {
                 info!("POST request for path: {path}");
 
                 if let Ok(movement) = Movement::from_str(path.trim_start_matches("/api/")) {
+                    info!("Received movement command: {movement:?}");
                     move_rover(movement).await;
-                    response_body = "OK".as_bytes();
+                    response_body = "OK".to_string();
                     response_header = alloc::format!(
                         "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         response_body.len()
                     );
                 } else {
-                    info!("Unknown movement command: {path}");
-                    response_body = "Invalid movement command".as_bytes();
+                    warn!("Unknown movement command: {path}");
+                    response_body = "Invalid movement command".to_string();
                     response_header = alloc::format!(
                         "HTTP/1.0 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         response_body.len()
@@ -207,8 +233,8 @@ pub async fn web_task(stack: Stack<'static>) -> ! {
                 }
             }
             _ => {
-                info!("Invalid method: {method}");
-                response_body = "Invalid method".as_bytes();
+                warn!("Invalid method: {method}");
+                response_body = "Invalid method".to_string();
                 response_header = alloc::format!(
                     "HTTP/1.0 405 Invalid Method\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     response_body.len()
@@ -218,11 +244,26 @@ pub async fn web_task(stack: Stack<'static>) -> ! {
 
         if let Err(e) = socket.write_all(response_header.as_bytes()).await {
             log::warn!("Header write error: {:?}", e);
-        } else if let Err(e) = socket.write_all(response_body).await {
+        } else if let Err(e) = socket.write_all(response_body.as_bytes()).await {
             log::warn!("Body write error: {:?}", e);
         }
 
         let _ = socket.flush().await;
         socket.close();
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum WebStatus {
+    WaitingForSteppers,
+    SteppersReady,
+    InitError(&'static str),
+}
+
+static SERVER_STATUS: Mutex<Cell<WebStatus>> = Mutex::new(Cell::new(WebStatus::WaitingForSteppers));
+
+pub fn set_server_status(status: WebStatus) {
+    critical_section::with(|cs| {
+        SERVER_STATUS.borrow(cs).set(status);
+    });
 }

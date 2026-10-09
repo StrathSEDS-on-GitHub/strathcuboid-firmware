@@ -64,16 +64,28 @@ async fn main(spawner: Spawner) {
     let sw_interrupt =
         esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
-
     info!("Embassy initialized!");
-    // rover::init_rover(peripherals.I2C0, peripherals.GPIO21, peripherals.GPIO22).await;
 
     let (wifi_controller, interfaces) = esp_radio::wifi::new(peripherals.WIFI, Default::default())
         .expect("Failed to initialize Wi-Fi controller");
+    info!("Wi-Fi controller initialized!");
 
     // Start the web server
     spawner.spawn(web::start_web_server(spawner, interfaces, wifi_controller).unwrap());
     info!("Web server started!");
+    web::set_server_status(web::WebStatus::WaitingForSteppers);
+
+    // Initialize rover stepper motors
+    match rover::init_rover(peripherals.I2C0, peripherals.GPIO21, peripherals.GPIO22).await {
+        Ok(()) => {
+            info!("Rover initialized successfully");
+            web::set_server_status(web::WebStatus::SteppersReady);
+        }
+        Err(e) => {
+            error!("Failed to initialize rover: {}", e);
+            web::set_server_status(web::WebStatus::InitError(e));
+        }
+    }
 
     // Not allowed to quit
     loop {

@@ -16,7 +16,7 @@ pub async fn init_rover(
     i2c: impl Instance + 'static,
     sda: impl PeripheralInput<'static> + PeripheralOutput<'static>,
     sdl: impl PeripheralInput<'static> + PeripheralOutput<'static>,
-) {
+) -> Result<(), &'static str> {
     let i2c_config = esp_hal::i2c::master::Config::default().with_frequency(Rate::from_hz(1600));
 
     let i2c_bus = esp_hal::i2c::master::I2c::new(i2c, i2c_config)
@@ -24,10 +24,15 @@ pub async fn init_rover(
         .with_sda(sda)
         .with_scl(sdl);
 
-    let mut pwm = Pca9685::new(i2c_bus, Address::default()).unwrap();
-    pwm.set_prescale(100).unwrap();
-    pwm.enable().unwrap();
+    let mut pwm =
+        Pca9685::new(i2c_bus, Address::default()).map_err(|_| "Failed to initialize PCA9685")?;
+    pwm.set_prescale(100)
+        .map_err(|_| "Failed to set prescale value")?;
+    pwm.enable().map_err(|_| "Failed to enable PCA9685")?;
+
     *(PWM.lock()).await = Some(pwm);
+
+    Ok(())
 }
 
 pub async fn move_rover(movement: Movement) {

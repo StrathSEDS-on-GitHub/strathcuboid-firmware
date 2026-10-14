@@ -6,8 +6,7 @@ use esp_hal::i2c::master::{I2c, Instance};
 use esp_hal::time::Rate;
 use log::info;
 use pwm_pca9685::{Address, Channel, Pca9685};
-
-use receiver::Movement;
+use web_rover::Movement;
 
 pub static PWM: Mutex<CriticalSectionRawMutex, Option<Pca9685<I2c<'static, Blocking>>>> =
     Mutex::new(None);

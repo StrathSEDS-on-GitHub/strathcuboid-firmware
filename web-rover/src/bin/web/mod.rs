@@ -16,7 +16,7 @@ use log::{info, warn};
 use static_cell::StaticCell;
 
 use crate::rover::move_rover;
-use receiver::Movement;
+use web_rover::Movement;
 
 // based on derekmolloy.ie/an-async-wi-fi-web-server-on-the-esp32-c3-with-embassy-and-no_std-rust-9/
 static STACK_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();

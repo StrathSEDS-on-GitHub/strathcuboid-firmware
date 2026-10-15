@@ -161,7 +161,7 @@ async fn web_task(stack: Stack<'static>) -> ! {
         let path = target.split("?").nth(0).unwrap_or("/");
 
         let response_header: String;
-        let response_body: String;
+        let response_body: &[u8];
         match method {
             "GET" => {
                 info!("GET request for path: {path}");
@@ -173,14 +173,14 @@ async fn web_task(stack: Stack<'static>) -> ! {
 
                         response_body = match web_status {
                             WebStatus::WaitingForSteppers => {
-                                include_str!("waiting_for_steppers.html").to_string()
+                                include_str!("waiting_for_steppers.html").as_bytes()
                             }
                             WebStatus::InitError(msg) => {
                                 info!("Initialization error: {}", msg);
-                                include_str!("init_error.html").replace("{message}", msg)
+                                include_str!("init_error.html").as_bytes()
                             }
                             WebStatus::SteppersReady => {
-                                include_str!("drivers_ready.html").to_string()
+                                include_str!("drivers_ready.html").as_bytes()
                             }
                         };
                         response_header = alloc::format!(
@@ -189,14 +189,14 @@ async fn web_task(stack: Stack<'static>) -> ! {
                         );
                     }
                     "/style.css" => {
-                        response_body = include_str!("style.css").to_string();
+                        response_body = include_str!("style.css").as_bytes();
                         response_header = alloc::format!(
                             "HTTP/1.0 200 OK\r\nContent-Type: text/css\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             response_body.len()
                         );
                     }
                     "/favicon.ico" => {
-                        response_body = include_str!("favicon.ico").to_string();
+                        response_body = include_bytes!("favicon.ico");
                         response_header = alloc::format!(
                             "HTTP/1.0 200 OK\r\nContent-Type: image/x-icon\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             response_body.len()
@@ -204,7 +204,7 @@ async fn web_task(stack: Stack<'static>) -> ! {
                     }
                     _ => {
                         warn!("Unknown path: {path}");
-                        response_body = "Not Found".to_string();
+                        response_body = "Not Found".as_bytes();
                         response_header = alloc::format!(
                             "HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             response_body.len()
@@ -218,14 +218,14 @@ async fn web_task(stack: Stack<'static>) -> ! {
                 if let Ok(movement) = Movement::from_str(path.trim_start_matches("/api/")) {
                     info!("Received movement command: {movement:?}");
                     move_rover(movement).await;
-                    response_body = "OK".to_string();
+                    response_body = "OK".as_bytes();
                     response_header = alloc::format!(
                         "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         response_body.len()
                     );
                 } else {
                     warn!("Unknown movement command: {path}");
-                    response_body = "Invalid movement command".to_string();
+                    response_body = "Invalid movement command".as_bytes();
                     response_header = alloc::format!(
                         "HTTP/1.0 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         response_body.len()
@@ -234,7 +234,7 @@ async fn web_task(stack: Stack<'static>) -> ! {
             }
             _ => {
                 warn!("Invalid method: {method}");
-                response_body = "Invalid method".to_string();
+                response_body = "Invalid method".as_bytes();
                 response_header = alloc::format!(
                     "HTTP/1.0 405 Invalid Method\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     response_body.len()
@@ -244,7 +244,7 @@ async fn web_task(stack: Stack<'static>) -> ! {
 
         if let Err(e) = socket.write_all(response_header.as_bytes()).await {
             log::warn!("Header write error: {:?}", e);
-        } else if let Err(e) = socket.write_all(response_body.as_bytes()).await {
+        } else if let Err(e) = socket.write_all(response_body).await {
             log::warn!("Body write error: {:?}", e);
         }
 

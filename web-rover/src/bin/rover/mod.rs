@@ -159,7 +159,7 @@ async fn stop() {
 }
 
 async fn shuffle() {
-    for _i in 0..10 {
+    for _i in 0..5 {
         let shared_bool = SHARED_STOP.load(Ordering::Relaxed);
         if !shared_bool {
             break;
@@ -173,4 +173,5 @@ async fn shuffle() {
         right().await;
         Timer::after(Duration::from_hz(2)).await;
     }
+    stop().await;
 }

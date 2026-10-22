@@ -1,12 +1,16 @@
+use core::sync::atomic::{Ordering};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
+use embassy_time::{Duration, Timer};
 use esp_hal::Blocking;
 use esp_hal::gpio::interconnect::{PeripheralInput, PeripheralOutput};
 use esp_hal::i2c::master::{I2c, Instance};
 use esp_hal::time::Rate;
 use log::info;
 use pwm_pca9685::{Address, Channel, Pca9685};
-use web_rover::Movement;
+use web_rover::{Emote, Movement};
+
+use crate::web::SHARED_STOP;
 
 pub static PWM: Mutex<CriticalSectionRawMutex, Option<Pca9685<I2c<'static, Blocking>>>> =
     Mutex::new(None);
@@ -34,6 +38,17 @@ pub async fn init_rover(
     Ok(())
 }
 
+/*
+Wheels:
+C0: Front Left
+C1: Back Right
+C2: Back Left
+C3: Front Right
+C4: Middle Left
+C5: Middle Right
+*/
+
+
 pub async fn move_rover(movement: Movement) {
     info!("move to the {:?}", movement);
     match movement {
@@ -42,6 +57,14 @@ pub async fn move_rover(movement: Movement) {
         Movement::Left => left().await,
         Movement::Right => right().await,
         Movement::Stop => stop().await,
+    }
+}
+
+#[embassy_executor::task]
+pub async fn emote_rover(emote: Emote) {
+    info!("emote {:?}", emote);
+    match emote {
+        Emote::Shuffle => shuffle().await
     }
 }
 
@@ -133,4 +156,21 @@ async fn stop() {
     move_wheel(pwm, Channel::C3, WheelDirection::Stop);
     move_wheel(pwm, Channel::C4, WheelDirection::Stop);
     move_wheel(pwm, Channel::C5, WheelDirection::Stop);
+}
+
+async fn shuffle() {
+    for _i in 0..10 {
+        let shared_bool = SHARED_STOP.load(Ordering::Relaxed);
+        if !shared_bool {
+            break;
+        }
+        left().await;
+        Timer::after(Duration::from_hz(2)).await;
+        let shared_bool = SHARED_STOP.load(Ordering::Relaxed);
+        if !shared_bool {
+            break;
+        }
+        right().await;
+        Timer::after(Duration::from_hz(2)).await;
+    }
 }

@@ -24,3 +24,19 @@ impl FromStr for Movement {
         }
     }
 }
+
+#[derive(Debug)]
+pub enum Emote {
+    Shuffle,
+}
+
+impl FromStr for Emote {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "shuffle" => Result::Ok(Self::Shuffle),
+            _ => Result::Err(()),
+        }
+    }
+}

@@ -4,7 +4,9 @@ use core::cell::Cell;
 use core::str::FromStr;
 
 use alloc::string::{String, ToString};
+use core::sync::atomic::{AtomicBool, Ordering};
 use critical_section::Mutex;
+use embassy_executor::Spawner;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{IpEndpoint, Ipv4Address, Runner, Stack, StackResources};
@@ -15,11 +17,12 @@ use esp_radio::wifi::{Interface, Interfaces, WifiController};
 use log::{info, warn};
 use static_cell::StaticCell;
 
-use crate::rover::move_rover;
-use web_rover::Movement;
+use crate::rover::{emote_rover, move_rover};
+use web_rover::{Emote, Movement};
 
 // based on derekmolloy.ie/an-async-wi-fi-web-server-on-the-esp32-c3-with-embassy-and-no_std-rust-9/
 static STACK_RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+pub static SHARED_STOP: AtomicBool = AtomicBool::new(false);
 
 #[embassy_executor::task]
 pub(super) async fn start_web_server(
@@ -58,7 +61,7 @@ pub(super) async fn start_web_server(
 
     info!("Starting web server");
     spawner.spawn(dhcp_task(stack).unwrap());
-    spawner.spawn(web_task(stack).unwrap());
+    spawner.spawn(web_task(stack,spawner).unwrap());
 }
 
 #[embassy_executor::task]
@@ -126,7 +129,7 @@ async fn dhcp_task(stack: Stack<'static>) -> ! {
 }
 
 #[embassy_executor::task]
-async fn web_task(stack: Stack<'static>) -> ! {
+async fn web_task(stack: Stack<'static>, spawner: Spawner) -> ! {
     let mut rx_buffer = [0u8; 1536];
     let mut tx_buffer = [0u8; 1536];
 
@@ -214,9 +217,22 @@ async fn web_task(stack: Stack<'static>) -> ! {
             }
             "POST" => {
                 info!("POST request for path: {path}");
+                if let Ok(emote) = Emote::from_str(path.trim_start_matches("/api/emote/")){
+                    info!("Received emote command: {emote:?}");
+                    SHARED_STOP.store(true,Ordering::Relaxed);
+                    spawner.spawn(emote_rover(emote).unwrap());
+                    response_body = "OK".as_bytes();
+                    response_header = alloc::format!(
+                        "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        response_body.len()
+                    );
 
-                if let Ok(movement) = Movement::from_str(path.trim_start_matches("/api/")) {
+                } else if let Ok(movement) = Movement::from_str(path.trim_start_matches("/api/")) {
                     info!("Received movement command: {movement:?}");
+                    match movement {
+                        Movement::Stop => SHARED_STOP.store(false,Ordering::Relaxed),
+                        _ => (),
+                    }
                     move_rover(movement).await;
                     response_body = "OK".as_bytes();
                     response_header = alloc::format!(

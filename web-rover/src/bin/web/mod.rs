@@ -229,10 +229,8 @@ async fn web_task(stack: Stack<'static>, spawner: Spawner) -> ! {
 
                 } else if let Ok(movement) = Movement::from_str(path.trim_start_matches("/api/")) {
                     info!("Received movement command: {movement:?}");
-                    match movement {
-                        Movement::Stop => SHARED_STOP.store(false,Ordering::Relaxed),
-                        _ => (),
-                    }
+                    
+                    SHARED_STOP.store(false,Ordering::Relaxed);
                     move_rover(movement).await;
                     response_body = "OK".as_bytes();
                     response_header = alloc::format!(

@@ -26,7 +26,7 @@ pub async fn init_rover(
     let mut pwm =
         Pca9685::new(i2c_bus, Address::default()).map_err(|_| "Failed to initialize PCA9685")?;
     pwm.set_prescale(100)
-        .map_err(|_| "Failed to set prescale value")?;
+        .map_err(|_| "Failed to connect to stepper driver")?; // 100 is already the default
     pwm.enable().map_err(|_| "Failed to enable PCA9685")?;
 
     *(PWM.lock()).await = Some(pwm);

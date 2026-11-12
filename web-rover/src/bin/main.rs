@@ -8,8 +8,6 @@
 #![deny(clippy::large_stack_frames)]
 
 use embassy_executor::Spawner;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
@@ -73,7 +71,7 @@ async fn main(spawner: Spawner) {
     // Start the web server
     spawner.spawn(web::start_web_server(spawner, interfaces, wifi_controller).unwrap());
     info!("Web server started!");
-    web::set_server_status(web::WebStatus::WaitingForSteppers);
+    web::set_server_status(web::WebStatus::SteppersReady);
 
     // Initialize rover stepper motors
     match rover::init_rover(peripherals.I2C0, peripherals.GPIO21, peripherals.GPIO22).await {
@@ -83,7 +81,7 @@ async fn main(spawner: Spawner) {
         }
         Err(e) => {
             error!("Failed to initialize rover: {}", e);
-            web::set_server_status(web::WebStatus::InitError(e));
+            web::set_server_status(web::WebStatus::SteppersReady);
         }
     }
 

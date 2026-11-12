@@ -1,9 +1,10 @@
 extern crate alloc;
 
+use alloc::borrow::Cow;
 use core::cell::Cell;
 use core::str::FromStr;
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use critical_section::Mutex;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
@@ -161,7 +162,7 @@ async fn web_task(stack: Stack<'static>) -> ! {
         let path = target.split("?").nth(0).unwrap_or("/");
 
         let response_header: String;
-        let response_body: &[u8];
+        let response_body: Cow<'static, [u8]>;
         match method {
             "GET" => {
                 info!("GET request for path: {path}");
@@ -173,14 +174,18 @@ async fn web_task(stack: Stack<'static>) -> ! {
 
                         response_body = match web_status {
                             WebStatus::WaitingForSteppers => {
-                                include_str!("waiting_for_steppers.html").as_bytes()
+                                Cow::Borrowed(include_bytes!("waiting_for_steppers.html"))
                             }
                             WebStatus::InitError(msg) => {
                                 info!("Initialization error: {}", msg);
-                                include_str!("init_error.html").as_bytes()
+                                Cow::Owned(
+                                    include_str!("init_error.html")
+                                        .replace("{message}", msg)
+                                        .into_bytes(),
+                                )
                             }
                             WebStatus::SteppersReady => {
-                                include_str!("drivers_ready.html").as_bytes()
+                                Cow::Borrowed(include_bytes!("drivers_ready.html"))
                             }
                         };
                         response_header = alloc::format!(
@@ -189,22 +194,29 @@ async fn web_task(stack: Stack<'static>) -> ! {
                         );
                     }
                     "/style.css" => {
-                        response_body = include_str!("style.css").as_bytes();
+                        response_body = Cow::Borrowed(include_bytes!("style.css"));
                         response_header = alloc::format!(
                             "HTTP/1.0 200 OK\r\nContent-Type: text/css\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             response_body.len()
                         );
                     }
                     "/favicon.ico" => {
-                        response_body = include_bytes!("favicon.ico");
+                        response_body = Cow::Borrowed(include_bytes!("favicon.ico"));
                         response_header = alloc::format!(
                             "HTTP/1.0 200 OK\r\nContent-Type: image/x-icon\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             response_body.len()
                         );
                     }
+                    "/rover.png" => {
+                        response_body = Cow::Borrowed(include_bytes!("rover.png"));
+                        response_header = alloc::format!(
+                            "HTTP/1.0 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            response_body.len()
+                        );
+                    }
                     _ => {
                         warn!("Unknown path: {path}");
-                        response_body = "Not Found".as_bytes();
+                        response_body = Cow::Borrowed(b"Not Found");
                         response_header = alloc::format!(
                             "HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             response_body.len()
@@ -218,23 +230,35 @@ async fn web_task(stack: Stack<'static>) -> ! {
                 if let Ok(movement) = Movement::from_str(path.trim_start_matches("/api/")) {
                     info!("Received movement command: {movement:?}");
                     move_rover(movement).await;
-                    response_body = "OK".as_bytes();
+                    response_body = Cow::Borrowed(b"OK");
                     response_header = alloc::format!(
                         "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         response_body.len()
                     );
                 } else {
-                    warn!("Unknown movement command: {path}");
-                    response_body = "Invalid movement command".as_bytes();
-                    response_header = alloc::format!(
-                        "HTTP/1.0 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        response_body.len()
-                    );
+                    match path.trim_start_matches("/api/") {
+                        "ping" => {
+                            info!("Received ping command");
+                            response_body = Cow::Borrowed(b"Pong");
+                            response_header = alloc::format!(
+                                "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                response_body.len()
+                            );
+                        }
+                        _ => {
+                            warn!("Unknown POST path: {path}");
+                            response_body = Cow::Borrowed(b"Invalid post path");
+                            response_header = alloc::format!(
+                                "HTTP/1.0 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                response_body.len()
+                            );
+                        }
+                    }
                 }
             }
             _ => {
                 warn!("Invalid method: {method}");
-                response_body = "Invalid method".as_bytes();
+                response_body = Cow::Borrowed(b"Invalid method");
                 response_header = alloc::format!(
                     "HTTP/1.0 405 Invalid Method\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     response_body.len()
@@ -244,7 +268,7 @@ async fn web_task(stack: Stack<'static>) -> ! {
 
         if let Err(e) = socket.write_all(response_header.as_bytes()).await {
             log::warn!("Header write error: {:?}", e);
-        } else if let Err(e) = socket.write_all(response_body).await {
+        } else if let Err(e) = socket.write_all(response_body.as_ref()).await {
             log::warn!("Body write error: {:?}", e);
         }
 
